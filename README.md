@@ -1,0 +1,41 @@
+# NFL TUI
+
+A terminal user interface for viewing live NFL scores using TypeScript and Ink.
+
+## Features
+
+- View live NFL scores
+- Navigate through games using arrow keys
+- Select a game to see detailed field position and updates
+- Automatic refresh for live data
+- Visual field position indicator
+
+## Installation
+
+```bash
+npm install
+```
+
+## Usage
+
+### Development mode
+```bash
+npm run dev
+```
+
+### Build and run
+```bash
+npm run build
+npm start
+```
+
+## Controls
+
+- **↑/↓**: Navigate through games
+- **Enter**: Select a game to view details
+- **ESC**: Go back to game list
+- **Ctrl+C**: Exit the application
+
+## API
+
+This application uses the ESPN API to fetch live NFL scores.
