@@ -1,7 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { transformDetailedGame } from '../nfl-api.js';
+import { buildPlayLines, playQuarters, quarterLabel, teamNickname } from '../play-lines.js';
 import type { NFLGame } from '../types.js';
+
+const SIDE_PANEL_WIDTH = 52;
+const MIN_PLAY_WIDTH = 50;
+const STATS_PANEL_HEIGHT = 13;
+const TIME_WIDTH = 7;
+const TEAM_WIDTH = 12;
+// App padding (2) + header (5) + footer (4), plus one spare row: Ink clears the whole screen when output reaches the terminal height.
+const RESERVED_ROWS = 12;
+
+type Panel = 'plays' | 'summary';
+
+const useTerminalSize = () => {
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({ columns: stdout.columns || 80, rows: stdout.rows || 24 });
+
+  useEffect(() => {
+    const onResize = () => setSize({ columns: stdout.columns, rows: stdout.rows });
+    stdout.on('resize', onResize);
+    return () => {
+      stdout.off('resize', onResize);
+    };
+  }, [stdout]);
+
+  return size;
+};
 
 interface GameDetailProps {
   game: NFLGame;
@@ -12,8 +38,44 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
   const { exit } = useApp();
   const [game, setGame] = useState<NFLGame>(initialGame);
   const [loading, setLoading] = useState(true);
+  // null keeps the view pinned to the latest play so refreshes of a live game stay at the bottom.
+  const [scrollTop, setScrollTop] = useState<number | null>(null);
+  const [panel, setPanel] = useState<Panel>('plays');
+  // null tracks the latest quarter so a live game advances on its own.
+  const [selectedQuarter, setSelectedQuarter] = useState<string | null>(null);
 
-  useInput((input: string, key: { escape?: boolean; ctrl?: boolean; return?: boolean }) => {
+  const { columns, rows } = useTerminalSize();
+  const width = Math.max(40, columns - 2);
+  const bodyHeight = Math.max(6, rows - RESERVED_ROWS);
+  const sideBySide = width >= SIDE_PANEL_WIDTH + 1 + MIN_PLAY_WIDTH;
+  const playWidth = sideBySide ? width - SIDE_PANEL_WIDTH - 1 : width;
+  const playRows = bodyHeight - 3;
+  const descriptionWidth = Math.max(10, playWidth - 4 - TIME_WIDTH - TEAM_WIDTH);
+  const quarters = playQuarters(game.playByPlay || []);
+  const quarter = selectedQuarter !== null && quarters.includes(selectedQuarter)
+    ? selectedQuarter
+    : quarters[quarters.length - 1];
+  const quarterIndex = quarter === undefined ? -1 : quarters.indexOf(quarter);
+  const quarterPlays = (game.playByPlay || []).filter((play) => play.quarter === quarter);
+  const playLines = buildPlayLines(quarterPlays, descriptionWidth);
+
+  const maxScrollTop = Math.max(0, playLines.length - playRows);
+  const top = scrollTop === null ? maxScrollTop : Math.min(scrollTop, maxScrollTop);
+
+  const scrollBy = (delta: number) => {
+    const next = Math.max(0, top + delta);
+    setScrollTop(next >= maxScrollTop ? null : next);
+  };
+
+  const changeQuarter = (delta: number) => {
+    const nextIndex = quarterIndex + delta;
+    if (nextIndex < 0 || nextIndex >= quarters.length) return;
+    const isLatest = nextIndex === quarters.length - 1;
+    setSelectedQuarter(isLatest ? null : quarters[nextIndex]);
+    setScrollTop(isLatest ? null : 0);
+  };
+
+  useInput((input, key) => {
     if (key.ctrl && input === 'c' || input === 'q') {
       exit();
     } else if (key.escape) {
@@ -21,6 +83,15 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
     }
     if (input === 'r') {
       loadGameDetails();
+    }
+    if (key.upArrow) scrollBy(-1);
+    if (key.downArrow) scrollBy(1);
+    if (key.pageUp) scrollBy(-(playRows - 1));
+    if (key.pageDown) scrollBy(playRows - 1);
+    if (key.leftArrow) changeQuarter(-1);
+    if (key.rightArrow) changeQuarter(1);
+    if (key.tab && !sideBySide) {
+      setPanel((current) => (current === 'plays' ? 'summary' : 'plays'));
     }
   });
 
@@ -43,7 +114,7 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
       : 'Scheduled';
 
     return (
-      <Box flexDirection="column" marginBottom={1} borderStyle="single" paddingX={1}>
+      <Box flexDirection="column" marginBottom={1} borderStyle="single" paddingX={1} width={width}>
         <Box justifyContent="space-between">
           <Text bold color="green">NFL Game Tracker</Text>
           <Text bold>{statusText}</Text>
@@ -56,18 +127,25 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
     );
   };
 
-  const renderScoringSummary = () => {
+  const renderScoringSummary = (height: number) => {
+    const scoringPlays = game.scoringPlays || [];
+    const visibleCount = Math.max(1, height - 3);
+    const hidden = Math.max(0, scoringPlays.length - visibleCount);
+
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={52}>
-        <Text bold color="cyan">SCORING SUMMARY</Text>
-        {!game.scoringPlays || game.scoringPlays.length === 0 ? (
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={SIDE_PANEL_WIDTH} height={height} overflow="hidden">
+        <Box justifyContent="space-between">
+          <Text bold color="cyan">SCORING SUMMARY</Text>
+          {hidden > 0 && <Text dimColor>{hidden} earlier</Text>}
+        </Box>
+        {scoringPlays.length === 0 ? (
           <Text dimColor>No scoring plays yet.</Text>
         ) : (
-          game.scoringPlays.map((play, index) => (
+          scoringPlays.slice(hidden).map((play, index) => (
             <Box key={index}>
-              <Box width={8}><Text color="yellow">Q{play.quarter} {play.time}</Text></Box>
-              <Box width={18}><Text>{play.team}</Text></Box>
-              <Text>{play.type}  {play.description}</Text>
+              <Box width={10} flexShrink={0}><Text color="yellow">Q{play.quarter} {play.time}</Text></Box>
+              <Box width={TEAM_WIDTH} flexShrink={0}><Text wrap="truncate">{teamNickname(play.team)}</Text></Box>
+              <Text wrap="truncate">{play.type}  {play.description}</Text>
             </Box>
           ))
         )}
@@ -89,7 +167,7 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
     ];
 
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1} width={52}>
+      <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1} width={SIDE_PANEL_WIDTH} flexShrink={0}>
         <Text bold color="green">GAME STATS</Text>
         <Box>
           <Box width={18}><Text dimColor>STAT</Text></Box>
@@ -107,37 +185,35 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
     );
   };
 
-  const quarterLabel = (quarter: string) => {
-    const period = Number(quarter);
-    if (!period) return 'OTHER';
-    if (period === 5) return 'OVERTIME';
-    if (period > 5) return `OVERTIME ${period - 4}`;
-    return `QUARTER ${period}`;
-  };
-
   const renderPlayByPlay = () => {
-    const groupedByQuarter = (game.playByPlay || []).reduce((acc: Record<string, typeof game.playByPlay>, play) => {
-      const quarter = play.quarter;
-      if (!acc[quarter]) acc[quarter] = [];
-      acc[quarter].push(play);
-      return acc;
-    }, {});
+    const visible = playLines.slice(top, top + playRows);
+    const position = playLines.length > playRows
+      ? `${top + 1}-${top + visible.length} of ${playLines.length}`
+      : '';
 
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} width={62}>
-        <Text bold color="yellow">PLAY-BY-PLAY</Text>
-        {Object.keys(groupedByQuarter).length === 0 ? (
+      <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} width={playWidth} height={bodyHeight} overflow="hidden">
+        <Box justifyContent="space-between">
+          <Text>
+            <Text bold color="yellow">PLAY-BY-PLAY</Text>
+            {quarter !== undefined && (
+              <Text>
+                {'  '}
+                <Text dimColor={quarterIndex <= 0}>◀ </Text>
+                <Text bold>{quarterLabel(quarter)}</Text>
+                <Text dimColor={quarterIndex >= quarters.length - 1}> ▶</Text>
+              </Text>
+            )}
+          </Text>
+          <Text dimColor>{position}</Text>
+        </Box>
+        {playLines.length === 0 ? (
           <Text dimColor>No play-by-play data.</Text>
-        ) : Object.entries(groupedByQuarter).map(([quarter, plays]) => (
-          <Box key={quarter} flexDirection="column" marginTop={1}>
-            <Text bold color="yellow">{quarterLabel(quarter)}</Text>
-            {(plays || []).slice(-10).map((play, index) => (
-              <Box key={index}>
-                <Box width={8}><Text color="dimColor">{play.time}</Text></Box>
-                <Box width={18}><Text>{play.team || '-'}</Text></Box>
-                <Text>{play.description}</Text>
-              </Box>
-            ))}
+        ) : visible.map((line, index) => (
+          <Box key={index}>
+            <Box width={TIME_WIDTH} flexShrink={0}><Text dimColor>{line.time}</Text></Box>
+            <Box width={TEAM_WIDTH} flexShrink={0}><Text wrap="truncate">{line.team}</Text></Box>
+            <Text wrap="truncate">{line.text}</Text>
           </Box>
         ))}
       </Box>
@@ -146,8 +222,11 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
 
   const renderFooter = () => {
     return (
-      <Box flexDirection="row" justifyContent="space-between" marginTop={1} borderStyle="single" paddingX={1}>
+      <Box flexDirection="row" justifyContent="space-between" marginTop={1} borderStyle="single" paddingX={1} width={width}>
         <Text>esc Back</Text>
+        <Text>←→ Quarter</Text>
+        <Text>↑↓ PgUp PgDn Scroll</Text>
+        {!sideBySide && <Text>tab {panel === 'plays' ? 'Stats' : 'Plays'}</Text>}
         <Text>r Refresh</Text>
         <Text>q Quit</Text>
       </Box>
@@ -163,15 +242,19 @@ export const GameDetail: React.FC<GameDetailProps> = ({ game: initialGame, onBac
     );
   }
 
+  const renderSummary = () => (
+    <Box flexDirection="column" gap={1} height={bodyHeight} overflow="hidden" flexShrink={0}>
+      {renderScoringSummary(Math.max(4, bodyHeight - STATS_PANEL_HEIGHT - 1))}
+      {renderGameStats()}
+    </Box>
+  );
+
   return (
     <Box flexDirection="column">
       {renderHeader()}
-      <Box flexDirection="row" flexWrap="wrap" gap={1}>
-        <Box flexDirection="column" gap={1}>
-          {renderScoringSummary()}
-          {renderGameStats()}
-        </Box>
-        {renderPlayByPlay()}
+      <Box flexDirection="row" gap={1} height={bodyHeight}>
+        {(sideBySide || panel === 'summary') && renderSummary()}
+        {(sideBySide || panel === 'plays') && renderPlayByPlay()}
       </Box>
       {renderFooter()}
     </Box>
