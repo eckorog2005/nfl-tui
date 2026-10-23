@@ -39,3 +39,9 @@ npm start
 ## API
 
 This application uses the ESPN API to fetch live NFL scores.
+
+This uses ESPN's unofficial, undocumented public endpoints. It is not affiliated with or endorsed by ESPN or the NFL, and the API may change or stop working at any time.
+
+## License
+
+[MIT](LICENSE)

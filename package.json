@@ -20,7 +20,7 @@
     "tui",
     "ink"
   ],
-  "author": "",
+  "author": "Roger Lamb",
   "license": "MIT",
   "dependencies": {
     "@types/node": "^20.10.0",
