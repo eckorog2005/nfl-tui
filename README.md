@@ -12,6 +12,8 @@ A terminal user interface for viewing live NFL scores using TypeScript and Ink.
 
 ## Installation
 
+Requires Node.js 26 or later (see `.nvmrc`).
+
 ```bash
 npm install
 ```
